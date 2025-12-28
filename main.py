@@ -12,6 +12,9 @@ class Symb:
     def __add__(self, other):
         return resolve_bfunc(lambda x,y:x+y, self, other, "+")
     
+    def __radd__(self, other):
+        return resolve_bfunc(lambda x,y:x+y, self, other, "+")
+    
     def __rmul__(self, other):
         return resolve_bfunc(lambda x,y:x*y, self, other, "*")
     
@@ -30,6 +33,9 @@ class Symb:
     def __sub__(self, other):
         return resolve_bfunc(lambda x,y:x-y, self, other, "-")
     
+    def __rsub__(self, other):
+        return resolve_bfunc(lambda x,y:x-y, self, other, "-")
+    
     def __str__(self):
         return self.symb
     
@@ -42,10 +48,15 @@ class Symb:
         if self.symb in vars.keys():
             return vars[self.symb]
         raise AssertionError()
+    
+    def eval_point(self, p):
+        # p is scalar
+        return p
 
 class CFunc:
     def __init__(self, num):
         self.num = num
+        self.vars = set() # convenient for variable collection
 
     def __str__(self):
         return str(self.num)
@@ -83,7 +94,13 @@ class UFunc:
     def __add__(self, other):
         return resolve_bfunc(lambda x,y:x+y, self, other, "+")
     
+    def __radd__(self, other):
+        return resolve_bfunc(lambda x,y:x+y, self, other, "+")
+    
     def __sub__(self, other):
+        return resolve_bfunc(lambda x,y:x-y, self, other, "-")
+    
+    def __rsub__(self, other):
         return resolve_bfunc(lambda x,y:x-y, self, other, "-")
     
     def __rmul__(self, other):
@@ -104,6 +121,11 @@ class UFunc:
     def eval(self, vars):
         return self.func(self.body.eval(vars))
     
+    def eval_point(self, p):
+        # p is a tuple of size amount of vars
+        assert len(p) == self.arity, AssertionError()
+        return self.eval({var : pcoord for var, pcoord in zip(list(self.vars), p)})
+
     def __str__(self):
         if isinstance(self.body, (UFunc, BFunc)):
             return f"{self.funcsymb}({self.body.__str__()})"
@@ -1037,7 +1059,13 @@ class BFunc:
     def __add__(self, other):
         return resolve_bfunc(lambda x,y:x+y, self, other, "+")
     
+    def __radd__(self, other):
+        return resolve_bfunc(lambda x,y:x+y, self, other, "+")
+    
     def __sub__(self, other):
+        return resolve_bfunc(lambda x,y:x-y, self, other, "-")
+    
+    def __rsub__(self, other):
         return resolve_bfunc(lambda x,y:x-y, self, other, "-")
     
     def __rmul__(self, other):
@@ -1057,6 +1085,10 @@ class BFunc:
 
     def eval(self, vars):
         return self.func(self.left.eval(vars), self.right.eval(vars))
+    
+    def eval_point(self, p):
+        assert len(p) == self.arity, AssertionError()
+        return self.eval({var : pcoord for var, pcoord in zip(list(self.vars), p)})
         
     def __str__(self):
         if isinstance(self.left, (CFunc, Symb, UFunc)):
@@ -1166,6 +1198,8 @@ class VFunc:
     def __init__(self, *funcs):
         self.funcs = funcs
         self.dim = len(funcs)
+        self.vars = accumulate(set(), lambda x,y:x | y, [f.vars for f in self.funcs])
+        self.arity = len(self.vars)
 
     def diff(self, var):
         return VFunc(*[f.diff(var) for f in self.funcs])
@@ -1178,8 +1212,7 @@ class VFunc:
         return s[:-2] + ")"
 
     def plot_curve_2d(self, t_range=(-np.pi, np.pi), nt=1000):
-        assert self.dim == 2 and all([f.arity <= 1 for f in self.funcs]), AssertionError()
-        assert 1 == len(accumulate(set(), lambda x,y:x | y, [f.vars for f in self.funcs])), AssertionError()
+        assert self.dim == 2 and self.arity <= 1, AssertionError()
         
         # Parameter grid
         t = np.linspace(*t_range, nt)
@@ -1203,8 +1236,7 @@ class VFunc:
         plt.show()
 
     def plot_curve_3d(self, t_range=(-np.pi, np.pi), nt=1000):
-        assert self.dim == 3 and all([f.arity <= 1 for f in self.funcs]), AssertionError()
-        assert 1 == len(accumulate(set(), lambda x,y: x | y, [f.vars for f in self.funcs])), AssertionError()
+        assert self.dim == 3 and self.arity <= 1, AssertionError()
         
         # Parameter grid
         t = np.linspace(*t_range, nt)
@@ -1232,9 +1264,8 @@ class VFunc:
 
     def plot_param_surface(self, u_range=(-np.pi, np.pi), v_range=(-np.pi, np.pi), 
                       nu=50, nv=50):
-        assert self.dim == 3 and all([f.arity <= 2 for f in self.funcs]), AssertionError()
-        assert 2 == len(accumulate(set(), lambda x,y: x | y, [f.vars for f in self.funcs])), AssertionError()
-        
+        assert self.dim == 3 and self.arity <= 2, AssertionError()
+
         # Parameter grids
         u = np.linspace(*u_range, nu)
         v = np.linspace(*v_range, nv)
@@ -1259,3 +1290,64 @@ class VFunc:
         
         fig.colorbar(surf, shrink=0.5, aspect=5)
         plt.show()
+
+    def eval(self, vars):
+        return tuple([f.eval(vars) for f in self.funcs])
+    
+    def eval_point(self, p):
+        assert all([len(p) == k.arity for k in self.funcs]), AssertionError()
+        return self.eval({var : pcoord for var, pcoord in zip(list(self.vars), p)})
+
+    
+    def cross_prod(self, other):
+        # assume f1 and f2 are VFuncs with dim = 3
+
+        # are symb, UFunc, CFunc, BFunc
+        F1, F2, F3 = self.funcs
+        G1, G2, G3 = other.funcs
+
+        return VFunc(
+            F2 * G3 - G2 * F3,
+            G1 * F3 - F1 * G3,
+            F1 * G2 - G1 * F2
+        )
+    
+    def innerprod(self, other):
+        # assume f1 and f2 have same dim
+        result = CFunc(0)
+        for f1, f2 in zip(self.funcs, other.funcs):
+            result = result + f1 * f2
+
+        return result
+
+class Surface:
+
+    def __init__(self, paramf):
+        assert isinstance(paramf, VFunc), AssertionError()
+        assert paramf.dim == 3 and paramf.arity <= 2, AssertionError()
+        self.paramf = paramf
+
+        vars = list(set([Symb(x) for x in list(paramf.vars)]))
+
+        self.df_1 = paramf.diff(vars[0])
+        self.df_2 = paramf.diff(vars[1])
+
+        # not normalized
+        self.normal_vector = self.df_1.cross_prod(self.df_2)
+
+    def tangent_plane(self, p):
+        
+        # p is a point in coordinate space
+        coordinate_vector = VFunc(
+            Symb("x"),
+            Symb("y"),
+            Symb("z")
+        )
+
+        F_p = self.normal_vector.eval_point(p)
+        F_p = VFunc(*[CFunc(k) for k in F_p])
+
+        return coordinate_vector.innerprod(F_p)
+        
+
+
