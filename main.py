@@ -9,6 +9,9 @@ class Symb:
         self.arity = 1
         self.vars = set(symb) # convenience for plotting
 
+    def __eq__(self, other):
+        return self.symb == other.symb
+
     def __add__(self, other):
         return resolve_bfunc(lambda x,y:x+y, self, other, "+")
     
@@ -57,6 +60,7 @@ class CFunc:
     def __init__(self, num):
         self.num = num
         self.vars = set() # convenient for variable collection
+        self.arity = 0
 
     def __str__(self):
         return str(self.num)
@@ -72,6 +76,33 @@ class CFunc:
     
     def eval(self, vars):
         return self.num
+    
+    def __add__(self, other):
+        return resolve_bfunc(lambda x,y:x+y, self, other, "+")
+    
+    def __radd__(self, other):
+        return resolve_bfunc(lambda x,y:x+y, self, other, "+")
+    
+    def __sub__(self, other):
+        return resolve_bfunc(lambda x,y:x-y, self, other, "-")
+    
+    def __rsub__(self, other):
+        return resolve_bfunc(lambda x,y:x-y, self, other, "-")
+    
+    def __rmul__(self, other):
+        return resolve_bfunc(lambda x,y:x*y, self, other, "*")
+    
+    def __mul__(self, other):
+        return resolve_bfunc(lambda x,y:x*y, self, other, "*")
+    
+    def __neg__(self):
+        return resolve_ufunc(lambda x:-x, self, "-")
+    
+    def __truediv__(self, other):
+        return resolve_bfunc(lambda x,y:x/y, self, other, "/")
+    
+    def __pow__(self, other):
+        return resolve_bfunc(lambda x,y:x**y, self, other, "^")
 
 class Funcs:
 
@@ -82,13 +113,21 @@ class Funcs:
     @classmethod
     def cos(cls, obj):
         return resolve_ufunc(np.cos, obj, "cos")
+    
+    @classmethod
+    def sqrt(cls, obj):
+        return resolve_ufunc(np.sqrt, obj, "sqrt")
+    
+    @classmethod
+    def ln(cls, obj):
+        return resolve_ufunc(np.log, obj, "ln")
 
 class UFunc:
     def __init__(self, func, body, funcsymb):
         self.func = func
         self.body = body
         self.funcsymb = funcsymb
-        self.vars = get_vars(self)
+        self.vars = get_vars(self) # set of symbols
         self.arity = len(self.vars)
 
     def __add__(self, other):
@@ -148,65 +187,14 @@ class UFunc:
                 "*"
             )
         
-    def plot_implicit_3d(self, x_range=(-1.5, 1.5), y_range=(-1.5, 1.5), z_range=(-1.5, 1.5), 
-           nx=50, ny=50, nz=50):
-        assert self.arity == 3, AssertionError()
-        
-        # Create 3D grid
-        x = np.linspace(*x_range, nx)
-        y = np.linspace(*y_range, ny)
-        z = np.linspace(*z_range, nz)
-        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-        
-        # Vectorized evaluation on 3D grid
-        F = np.vectorize(lambda xi, yi, zi: self.eval({'x': xi, 'y': yi, 'z': zi}))(X, Y, Z)
-        
-        # Marching cubes to extract isosurface f=0
-        
-        try:
-            verts, faces, normals, values = measure.marching_cubes(F, level=0, spacing=(1,1,1))
-        except ValueError as e:
-            print(f"Marching cubes failed: {e}")
-            print("Try adjusting grid resolution or ranges")
-            return
-        
-        # Plot 3D surface
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # Create mesh from marching cubes output
-        mesh = Poly3DCollection(verts[faces], alpha=0.7, linewidths=0.5, edgecolors='gray')
-        mesh.set_facecolor((0.7, 0.8, 1))  # Light blue
-        ax.add_collection3d(mesh)
-        
-        # Set limits based on grid
-        ax.set_xlim(0, nx)
-        ax.set_ylim(0, ny)
-        ax.set_zlim(0, nz)
-        
-        # Labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        plt.title(f'Implicit surface: {self.__str__()} = 0')
-        
-        plt.show()
+        if self.funcsymb == "sqrt":
+            return resolve_bfunc(
+                lambda x,y:x/y,
+                self.body.diff(var),
+                BFunc(lambda x,y:x*y, 2, Funcs.sqrt(self.body), "*"),
+                "/"
+            )
 
-    def plot_implicit_2d(self, x_range=(-1, 1), y_range=(-1, 1), nx=200, ny=200):
-
-        assert self.arity == 2, AssertionError()
-        x = np.linspace(*x_range, nx)
-        y = np.linspace(*y_range, ny)
-        X, Y = np.meshgrid(x, y)
-        Z = np.vectorize(lambda xi, yi: self.eval({'x': xi, 'y': yi}))(X, Y)
-        plt.contour(X, Y, Z, levels=[0], colors='blue', linewidths=2)
-        plt.xlabel('x')
-        plt.ylabel('y')
-        plt.title(f'Implicit curve: {self.__str__()} = 0')
-        plt.grid(True, alpha=0.3)
-        plt.axis('equal')
-        plt.show()
-    
 def resolve_ufunc(func, body, funcsymb):
 
     if isinstance(body, int):
@@ -215,7 +203,7 @@ def resolve_ufunc(func, body, funcsymb):
         return CFunc(func(body.num))
     if isinstance(body, Symb):
         return UFunc(func, body, funcsymb)
-    if isinstance(body, UFunc): # sin(body) = sin(cos(body.body))
+    if isinstance(body, UFunc):
         body_res = resolve_ufunc(body.func, body.body, body.funcsymb)
         return UFunc(func, body_res, funcsymb)
     # body is BFunc
@@ -1040,7 +1028,7 @@ def resolve_bfunc(func, left, right, funcsymb):
 
 def get_vars(exp):
     if isinstance(exp, Symb):
-        return set(exp.symb)
+        return {exp.symb}
     if isinstance(exp, UFunc):
         return get_vars(exp.body)
     if isinstance(exp, BFunc):
@@ -1053,7 +1041,7 @@ class BFunc:
         self.left = left
         self.right = right
         self.funcsymb = funcsymb
-        self.vars = get_vars(self)
+        self.vars = get_vars(self) # set of symbols
         self.arity = len(self.vars)
 
     def __add__(self, other):
@@ -1118,76 +1106,25 @@ class BFunc:
                 "/"
             )
         if self.funcsymb == "^":
-            pass
-
-    def plot_implicit_2d(self, x_range=(-1, 1), y_range=(-1, 1), nx=200, ny=200):
-
-        assert self.arity == 2, AssertionError()
-        x = np.linspace(*x_range, nx)
-        y = np.linspace(*y_range, ny)
-        X, Y = np.meshgrid(x, y)
-        Z = np.vectorize(lambda xi, yi: self.eval({'x': xi, 'y': yi}))(X, Y)
-        plt.contour(X, Y, Z, levels=[0], colors='blue', linewidths=2)
-        plt.xlabel('x')
-        plt.ylabel('y')
-        plt.title(f'Implicit curve: {self.__str__()} = 0')
-        plt.grid(True, alpha=0.3)
-        plt.axis('equal')
-        plt.show()
-
-    def plot_implicit_3d(self, x_range=(-1.5, 1.5), y_range=(-1.5, 1.5), z_range=(-1.5, 1.5), 
-           nx=50, ny=50, nz=50):
-        assert self.arity == 3, AssertionError()
-        
-        # Create 3D grid
-        x = np.linspace(*x_range, nx)
-        y = np.linspace(*y_range, ny)
-        z = np.linspace(*z_range, nz)
-        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-        
-        # Vectorized evaluation on 3D grid
-        F = np.vectorize(lambda xi, yi, zi: self.eval({'x': xi, 'y': yi, 'z': zi}))(X, Y, Z)
-        
-        # Marching cubes to extract isosurface f=0
-        
-        try:
-            verts, faces, normals, values = measure.marching_cubes(F, level=0, spacing=(1,1,1))
-        except ValueError as e:
-            print(f"Marching cubes failed: {e}")
-            print("Try adjusting grid resolution or ranges")
-            return
-        
-        # Plot 3D surface
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # Create mesh from marching cubes output
-        mesh = Poly3DCollection(verts[faces], alpha=0.7, linewidths=0.5, edgecolors='gray')
-        mesh.set_facecolor((0.7, 0.8, 1))  # Light blue
-        ax.add_collection3d(mesh)
-        
-        # Set limits based on grid
-        ax.set_xlim(0, nx)
-        ax.set_ylim(0, ny)
-        ax.set_zlim(0, nz)
-        
-        # Labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        plt.title(f'Implicit surface: {self.__str__()} = 0')
-        
-        plt.show()
-
-
-def all_eq(self, lst):
-    if len(lst) == 1:
-        return True
-    f = lst[0]
-    for k in lst[1:]:
-        if k != f:
-            return False
-    return True
+            if isinstance(self.right, CFunc):
+                return resolve_bfunc(
+                    lambda x,y:x*y,
+                    self.right,
+                    resolve_bfunc(
+                        lambda x,y:x*y,
+                        self.left ** CFunc(self.right.num - 1),
+                        self.left.diff(var),
+                        "*"
+                    ),
+                    "*"
+                )
+            if isinstance(self.left, CFunc):
+                return resolve_bfunc(
+                    lambda x,y:x*y,
+                    self,
+                    Funcs.ln(self.left),
+                    "*"
+                )
 
 def accumulate(null, op, lst):
     if lst == []:
@@ -1196,13 +1133,24 @@ def accumulate(null, op, lst):
 
 class VFunc:
     def __init__(self, *funcs):
+
+        # funcs are cfuncs, symbols, bfuncs or ufuncs
+
         self.funcs = funcs
         self.dim = len(funcs)
-        self.vars = accumulate(set(), lambda x,y:x | y, [f.vars for f in self.funcs])
+
+        # set of symbol objects
+        self.vars = accumulate(set(), lambda x, y: x | y, [f.vars for f in self.funcs])
         self.arity = len(self.vars)
 
     def diff(self, var):
         return VFunc(*[f.diff(var) for f in self.funcs])
+    
+    def norm(self):
+        res = CFunc(0)
+        for func in self.funcs:
+            res = res + func ** 2
+        return Funcs.sqrt(res)
 
     def __str__(self):
         s = "("
@@ -1211,93 +1159,54 @@ class VFunc:
         
         return s[:-2] + ")"
 
-    def plot_curve_2d(self, t_range=(-np.pi, np.pi), nt=1000):
-        assert self.dim == 2 and self.arity <= 1, AssertionError()
-        
-        # Parameter grid
-        t = np.linspace(*t_range, nt)
-
-        t_symb = list(self.funcs[0].vars)[0]
-        
-        # Evaluate parametric functions
-        x_vals = np.vectorize(lambda ti: self.funcs[0].eval({t_symb: ti}))(t)
-        y_vals = np.vectorize(lambda ti: self.funcs[1].eval({t_symb: ti}))(t)
-        
-        # Plot parametric curve
-        plt.figure(figsize=(8, 8))
-        plt.plot(x_vals, y_vals, 'b-', linewidth=2, label=f'({self.funcs[0]}, {self.funcs[1]})')
-        plt.plot([x_vals[0]], [y_vals[0]], 'go', markersize=8, label='t=start')  # Start point
-        plt.plot([x_vals[-1]], [y_vals[-1]], 'ro', markersize=8, label='t=end')  # End point
-        
-        plt.title(f'Parametric curve: {self.__str__()}')
-        plt.grid(True, alpha=0.3)
-        plt.axis('equal')
-        plt.legend()
-        plt.show()
-
-    def plot_curve_3d(self, t_range=(-np.pi, np.pi), nt=1000):
-        assert self.dim == 3 and self.arity <= 1, AssertionError()
-        
-        # Parameter grid
-        t = np.linspace(*t_range, nt)
-        
-        t_symb = list(self.funcs[0].vars)[0]
-        
-        # Evaluate parametric functions
-        x_vals = np.vectorize(lambda ti: self.funcs[0].eval({t_symb: ti}))(t)
-        y_vals = np.vectorize(lambda ti: self.funcs[1].eval({t_symb: ti}))(t)
-        z_vals = np.vectorize(lambda ti: self.funcs[2].eval({t_symb: ti}))(t)
-        
-        # Plot parametric curve in 3D
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        ax.plot(x_vals, y_vals, z_vals, 'b-', linewidth=3, label=f'({self.funcs[0]}, {self.funcs[1]}, {self.funcs[2]})')
-        ax.plot([x_vals[0]], [y_vals[0]], [z_vals[0]], 'go', markersize=10, label='t=start')
-        ax.plot([x_vals[-1]], [y_vals[-1]], [z_vals[-1]], 'ro', markersize=10, label='t=end')
-        
-        ax.set_title(f'Parametric curve: {self.__str__()}')
-        
-        ax.grid(True, alpha=0.3)
-        plt.legend()
-        plt.show()
-
-    def plot_param_surface(self, u_range=(-np.pi, np.pi), v_range=(-np.pi, np.pi), 
-                      nu=50, nv=50):
-        assert self.dim == 3 and self.arity <= 2, AssertionError()
-
-        # Parameter grids
-        u = np.linspace(*u_range, nu)
-        v = np.linspace(*v_range, nv)
-        U, V = np.meshgrid(u, v)
-        
-        # Extract parameter symbols
-        u_symb = list(self.funcs[0].vars)[0]
-        v_symb = list(self.funcs[0].vars)[1]
-        
-        # Vectorized evaluation
-        X = np.vectorize(lambda ui, vi: self.funcs[0].eval({u_symb: ui, v_symb: vi}))(U, V)
-        Y = np.vectorize(lambda ui, vi: self.funcs[1].eval({u_symb: ui, v_symb: vi}))(U, V)
-        Z = np.vectorize(lambda ui, vi: self.funcs[2].eval({u_symb: ui, v_symb: vi}))(U, V)
-        
-        # Plot 3D surface
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        surf = ax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.8, linewidth=0, antialiased=True)
-
-        ax.set_title(f'Parametric surface: {self}')
-        
-        fig.colorbar(surf, shrink=0.5, aspect=5)
-        plt.show()
-
     def eval(self, vars):
         return tuple([f.eval(vars) for f in self.funcs])
     
     def eval_point(self, p):
-        assert all([len(p) == k.arity for k in self.funcs]), AssertionError()
+        assert all([len(p) >= k.arity for k in self.funcs]), AssertionError(f"len p: {len(p)}, arities: {[k.arity for k in self.funcs]}")
         return self.eval({var : pcoord for var, pcoord in zip(list(self.vars), p)})
+    
+    def __add__(self, other):
+        assert self.dim == other.dim, AssertionError()
+        return VFunc(*[
+            self.funcs[i] + other.funcs[i]
+            for i in range(self.dim)
+        ])
+    
+    def __radd__(self, other):
+        assert self.dim == other.dim, AssertionError()
+        return VFunc(*[
+            self.funcs[i] + other.funcs[i]
+            for i in range(self.dim)
+        ])
+    
+    def __neg__(self):
+        return VFunc(*[
+            self.funcs[i].__neg__()
+            for i in range(self.dim)
+        ])
+    
+    def __sub__(self, other):
+        assert self.dim == other.dim, AssertionError()
+        return VFunc(*[
+            self.funcs[i] - other.funcs[i]
+            for i in range(self.dim)
+        ])
+    
+    def __rsub__(self, other):
+        assert self.dim == other.dim, AssertionError()
+        return VFunc(*[
+            self.funcs[i] - other.funcs[i]
+            for i in range(self.dim)
+        ])
+    
+    def __mul__(self, other):
+        assert isinstance(other, (int, CFunc)), AssertionError()
+        return VFunc(*[f * other for f in self.funcs])
 
+    def __rmul__(self, other):
+        assert isinstance(other, (int, CFunc)), AssertionError()
+        return VFunc(*[f * other for f in self.funcs])
     
     def cross_prod(self, other):
         # assume f1 and f2 are VFuncs with dim = 3
@@ -1327,15 +1236,18 @@ class Surface:
         assert paramf.dim == 3 and paramf.arity <= 2, AssertionError()
         self.paramf = paramf
 
-        vars = list(set([Symb(x) for x in list(paramf.vars)]))
+        # assume first and second variable are in alphabetical order
+        self.vars_list = sorted(list(self.paramf.vars))
 
-        self.df_1 = paramf.diff(vars[0])
-        self.df_2 = paramf.diff(vars[1])
+        self.df_1 = paramf.diff(Symb(self.vars_list[0]))
+        self.df_2 = paramf.diff(Symb(self.vars_list[1]))
 
         # not normalized
         self.normal_vector = self.df_1.cross_prod(self.df_2)
 
-    def tangent_plane(self, p):
+        self.normal_vector_norm = self.normal_vector / self.normal_vector.norm()
+        
+    def tangent_plane_cartesian(self, p):
         
         # p is a point in coordinate space
         coordinate_vector = VFunc(
@@ -1348,6 +1260,191 @@ class Surface:
         F_p = VFunc(*[CFunc(k) for k in F_p])
 
         return coordinate_vector.innerprod(F_p)
+    
+    def tangent_plane_param(self, p):
+
+        # p is a point in coordinate space
+        # are tuples
+        df1_p = self.df_1.eval_point(p)
+        df2_p = self.df_2.eval_point(p)
+
+        p_u = int(p[0])
+        p_v = int(p[1])
+
+        u_symb = Symb(self.vars_list[0])
+        v_symb = Symb(self.vars_list[1])
+
+        # tuple
+        F_p = self.paramf.eval_point(p)
+
+        return VFunc(
+            CFunc(F_p[0]) + (u_symb - p_v) * CFunc(df1_p[0]) + (v_symb - p_u) * CFunc(df2_p[0]),
+            CFunc(F_p[1]) + (u_symb - p_v) * CFunc(df1_p[1]) + (v_symb - p_u) * CFunc(df2_p[1]),
+            CFunc(F_p[2]) + (u_symb - p_v) * CFunc(df1_p[2]) + (v_symb - p_u) * CFunc(df2_p[2]),
+        )
+    
+    def show(self, u_range, v_range, nu=200, nv=200, p_tangent_plane=None):
         
+        # Parameter grids
+        u = np.linspace(u_range[0], u_range[1], nu)
+        v = np.linspace(v_range[0], v_range[1], nv)
 
+        U, V = np.meshgrid(u, v)
+        
+        # Extract parameter symbols
+        vars = list(self.paramf.vars)
+        u_symb = vars[0]
+        v_symb = vars[1]
+        
+        # Vectorized evaluation
+        X = np.vectorize(lambda ui, vi: self.paramf.funcs[0].eval({u_symb: ui, v_symb: vi}))(U, V)
+        Y = np.vectorize(lambda ui, vi: self.paramf.funcs[1].eval({u_symb: ui, v_symb: vi}))(U, V)
+        Z = np.vectorize(lambda ui, vi: self.paramf.funcs[2].eval({u_symb: ui, v_symb: vi}))(U, V)
+        
+        # Plot 3D surface
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot_surface(X, Y, Z, alpha=0.8, linewidth=0, antialiased=True)
 
+        if p_tangent_plane is not None:
+
+            plane = self.tangent_plane_param(p_tangent_plane)
+
+            X = np.vectorize(lambda ui, vi: plane.funcs[0].eval({u_symb: ui, v_symb: vi}))(U, V)
+            Y = np.vectorize(lambda ui, vi: plane.funcs[1].eval({u_symb: ui, v_symb: vi}))(U, V)
+            Z = np.vectorize(lambda ui, vi: plane.funcs[2].eval({u_symb: ui, v_symb: vi}))(U, V)
+
+            ax.plot_surface(X, Y, Z, alpha=0.8, linewidth=0, antialiased=True)
+
+        plt.show()
+
+class Curve2D:
+
+    def __init__(self, paramf):
+
+        assert isinstance(paramf, VFunc), AssertionError()
+        assert paramf.dim == 2 and paramf.arity <= 1, AssertionError()
+        self.paramf = paramf
+
+        # assume first and second variable are in alphabetical order
+        self.var_string_symb = list(self.paramf.vars)[0] # only one var
+
+        self.df_vector = paramf.diff(Symb(self.var_string_symb))
+        self.curv_vector = self.df_vector.diff(Symb(self.var_string_symb))
+        
+        df_vect_norm = self.df_vector.norm()
+        curv_vect_norm = self.curv_vector.norm()
+        self.curv = Funcs.sqrt(
+            df_vect_norm ** 2 * curv_vect_norm ** 2
+            - self.df_vector.innerprod(self.curv_vector) ** 2
+        ) / df_vect_norm ** 3
+
+    def tangent_line_vect(self, p):
+
+        # p is a scalar
+        dir_vect = self.df_vector.eval_point([p])
+
+        symb = Symb(self.var_string_symb)
+
+        # scalar 
+        F_p = self.paramf.eval_point([p])
+
+        return VFunc(
+            CFunc(F_p[0]) + (symb - CFunc(int(p))) * CFunc(dir_vect[0]),
+            CFunc(F_p[1]) + (symb - CFunc(int(p))) * CFunc(dir_vect[1]),
+        )
+
+    def show(self, t_range, nt=200, tangent_line_p=None):
+
+        # Parameter grids
+        t = np.linspace(t_range[0], t_range[1], nt)
+        
+        # Vectorized evaluation
+        X = np.vectorize(lambda ti: self.paramf.funcs[0].eval({self.var_string_symb: ti}))(t)
+        Y = np.vectorize(lambda ti: self.paramf.funcs[1].eval({self.var_string_symb: ti}))(t)
+        
+        # Plot 3D surface
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot()
+        ax.plot(X, Y)
+
+        if tangent_line_p is not None:
+
+            line = self.tangent_line_vect(tangent_line_p)
+
+            X = np.vectorize(lambda ti: line.funcs[0].eval({self.var_string_symb: ti}))(t)
+            Y = np.vectorize(lambda ti: line.funcs[1].eval({self.var_string_symb: ti}))(t)
+
+            ax.plot(X, Y)
+
+        plt.show()
+
+class Curve3D:
+
+    def __init__(self, paramf):
+
+        assert isinstance(paramf, VFunc), AssertionError()
+        assert paramf.dim == 3 and paramf.arity <= 1, AssertionError()
+        self.paramf = paramf
+
+        # assume first and second variable are in alphabetical order
+        self.var_string_symb = list(self.paramf.vars)[0] # only one var
+
+        self.df_vector = paramf.diff(Symb(self.var_string_symb))
+
+        double_df = self.df_vector.diff(Symb(self.var_string_symb))
+        triple_df = double_df.diff(Symb(self.var_string_symb))
+        t = double_df.cross_prod(self.df_vector).norm()
+
+        # from formula found at https://en.wikipedia.org/wiki/Curvature
+        self.curv = t / (self.df_vector.norm() ** 3)
+        
+        # determinant
+        self.torsion = (
+            self.df_vector[0] * (double_df.funcs[1] * triple_df.funcs[2] - double_df.funcs[2] * triple_df.funcs[1])
+            - self.df_vector[1] * (double_df.funcs[0] * triple_df.funcs[2] - double_df.funcs[2] * triple_df.funcs[0])
+            + self.df_vector[2] * (double_df.funcs[0] * triple_df.funcs[1] - double_df.funcs[1] * triple_df.funcs[0])
+        ) / (t ** 2)
+
+    def tangent_line_vect(self, p):
+
+        # p is a scalar
+        dir_vect = self.df_vector.eval_point([p])
+
+        symb = Symb(self.var_string_symb)
+
+        # scalar 
+        F_p = self.paramf.eval_point([p])
+
+        return VFunc(
+            CFunc(F_p[0]) + (symb - CFunc(int(p))) * CFunc(dir_vect[0]),
+            CFunc(F_p[1]) + (symb - CFunc(int(p))) * CFunc(dir_vect[1]),
+            CFunc(F_p[2]) + (symb - CFunc(int(p))) * CFunc(dir_vect[2])
+        )
+    
+    def show(self, t_range, nt=200, tangent_line_p=None):
+
+        # Parameter grids
+        t = np.linspace(t_range[0], t_range[1], nt)
+        
+        # Vectorized evaluation
+        X = np.vectorize(lambda ti: self.paramf.funcs[0].eval({self.var_string_symb: ti}))(t)
+        Y = np.vectorize(lambda ti: self.paramf.funcs[1].eval({self.var_string_symb: ti}))(t)
+        Z = np.vectorize(lambda ti: self.paramf.funcs[2].eval({self.var_string_symb: ti}))(t)
+        
+        # Plot 3D surface
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.axes(projection='3d')
+        ax.plot(X, Y, Z)
+
+        if tangent_line_p is not None:
+
+            line = self.tangent_line_vect(tangent_line_p)
+
+            X = np.vectorize(lambda ti: line.funcs[0].eval({self.var_string_symb: ti}))(t)
+            Y = np.vectorize(lambda ti: line.funcs[1].eval({self.var_string_symb: ti}))(t)
+            Z = np.vectorize(lambda ti: line.funcs[2].eval({self.var_string_symb: ti}))(t)
+
+            ax.plot(X, Y, Z)
+
+        plt.show()

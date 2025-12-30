@@ -1,11 +1,17 @@
-from main import Symb, Funcs, VFunc
+from main import Symb, Funcs, VFunc, Curve3D
 import numpy as np
 
 t = Symb("t")
 
+# parametrisation
 par = VFunc(
-    Funcs.cos(t),
-    Funcs.sin(t),
+    3 * Funcs.cos(t),
+    3 * Funcs.sin(t),
     t
 )
-par.plot_curve_3d(t_range=(0, 4*np.pi))
+
+# determine point for tangent line
+point = np.pi / 4
+
+curve = Curve3D(par)
+curve.show(t_range=(0, 2 * np.pi), tangent_line_p=point)
